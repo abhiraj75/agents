@@ -33,6 +33,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/openkruise/agents/pkg/sandbox-manager/quota"
 	quotaspec "github.com/openkruise/agents/pkg/sandbox-manager/quota/spec"
@@ -772,6 +773,55 @@ func TestUpdateAPIKey(t *testing.T) {
 				require.True(t, ok)
 				assert.Equal(t, tt.expectName, stored.Name)
 			}
+		})
+	}
+}
+
+func TestUpdateAPIKeyHandlerErrors(t *testing.T) {
+	controller, fc, teardown := Setup(t)
+	defer teardown()
+
+	corruptID := uuid.New()
+	secret := &corev1.Secret{}
+	require.NoError(t, fc.Get(t.Context(), ctrlclient.ObjectKey{Namespace: "sandbox-system", Name: keys.KeySecretName}, secret))
+	secret.Data[corruptID.String()] = []byte("{")
+	require.NoError(t, fc.Update(t.Context(), secret))
+
+	tests := []struct {
+		name        string
+		target      *models.CreatedTeamAPIKey
+		expectCode  int
+		expectError string
+	}{
+		{
+			name:        "missing permission middleware fails closed",
+			expectCode:  http.StatusInternalServerError,
+			expectError: "target API key not found in context",
+		},
+		{
+			name:        "key deleted after permission check returns not found",
+			target:      &models.CreatedTeamAPIKey{ID: uuid.New()},
+			expectCode:  http.StatusNotFound,
+			expectError: "API key not found",
+		},
+		{
+			name:        "storage failure returns internal error",
+			target:      &models.CreatedTeamAPIKey{ID: corruptID},
+			expectCode:  http.StatusInternalServerError,
+			expectError: "Failed to update API key",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := NewRequest(t, nil, models.UpdateTeamAPIKey{Name: "renamed"}, nil, adminTestUser())
+			if tt.target != nil {
+				req = req.WithContext(context.WithValue(req.Context(), targetAPIKeyContextKey, tt.target))
+			}
+			_, apiErr := controller.UpdateAPIKey(req)
+			require.NotNil(t, apiErr)
+			assert.Equal(t, tt.expectCode, apiErr.Code)
+			assert.Contains(t, apiErr.Message, tt.expectError)
 		})
 	}
 }

@@ -1336,6 +1336,7 @@ func TestSecretKeyStorage_RenameKey(t *testing.T) {
 	tests := []struct {
 		name        string
 		key         *models.CreatedTeamAPIKey
+		data        []byte
 		patchErr    error
 		expectErrIs error
 		expectError string
@@ -1355,6 +1356,12 @@ func TestSecretKeyStorage_RenameKey(t *testing.T) {
 			expectErrIs: ErrAdminKeyNotRenamable,
 		},
 		{
+			name:        "corrupt stored entry returns error",
+			key:         &models.CreatedTeamAPIKey{ID: id},
+			data:        []byte("{"),
+			expectError: "failed to unmarshal api-key",
+		},
+		{
 			name:        "patch failure is returned",
 			key:         &models.CreatedTeamAPIKey{ID: id},
 			patchErr:    errors.New("patch failed"),
@@ -1364,7 +1371,11 @@ func TestSecretKeyStorage_RenameKey(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			storage, c := newSecretStorageForTest(t, map[string][]byte{id.String(): stored})
+			data := stored
+			if tt.data != nil {
+				data = tt.data
+			}
+			storage, c := newSecretStorageForTest(t, map[string][]byte{id.String(): data})
 			if tt.patchErr != nil {
 				hookClient := &patchHookClient{
 					Client: c,
